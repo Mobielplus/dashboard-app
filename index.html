@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Order Form</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f8f9fa;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 24px;
+        }
+        
+        h1 {
+            margin: 0 0 24px 0;
+            color: #2d3748;
+            font-size: 24px;
+            font-weight: 600;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #4a5568;
+        }
+        
+        input[type="text"],
+        input[type="email"],
+        select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 16px;
+            transition: border-color 0.2s;
+            box-sizing: border-box;
+        }
+        
+        input[type="text"]:focus,
+        input[type="email"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #4299e1;
+            box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.1);
+        }
+        
+        select {
+            cursor: pointer;
+            background-color: white;
+        }
+        
+        .submit-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .submit-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+        
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+        
+        .submit-btn:disabled {
+            background: #a0aec0;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .status {
+            margin-top: 16px;
+            padding: 12px;
+            border-radius: 6px;
+            font-weight: 500;
+            display: none;
+        }
+        
+        .status.success {
+            background: #f0fff4;
+            color: #38a169;
+            border: 1px solid #9ae6b4;
+        }
+        
+        .status.error {
+            background: #fed7d7;
+            color: #e53e3e;
+            border: 1px solid #feb2b2;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 16px;
+            color: #718096;
+        }
+        
+        .auto-filled {
+            background-color: #f0fff4 !important;
+            border-color: #9ae6b4 !important;
+        }
+        
+        .connection-status {
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-bottom: 16px;
+        }
+        
+        .connected {
+            background: #f0fff4;
+            color: #38a169;
+            border: 1px solid #9ae6b4;
+        }
+        
+        .disconnected {
+            background: #fed7d7;
+            color: #e53e3e;
+            border: 1px solid #feb2b2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="connectionStatus" class="connection-status disconnected">
+            Waiting for Chatwoot connection...
+        </div>
+        
+        <h1>Customer Order Form</h1>
+        
+        <form id="orderForm">
+            <div class="form-group">
+                <label for="name">Name</label>
+                <input type="text" id="name" name="name" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="bestelnummer">Bestelnummer</label>
+                <input type="text" id="bestelnummer" name="bestelnummer" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="pakket">Pakket Type</label>
+                <select id="pakket" name="pakket" required>
+                    <option value="">Select package type...</option>
+                    <option value="pakket">Pakket</option>
+                    <option value="brievenbuspakket">Brievenbuspakket</option>
+                </select>
+            </div>
+            
+            <button type="submit" class="submit-btn" id="submitBtn">
+                Send to n8n Workflow
+            </button>
+            
+            <div class="loading" id="loading">
+                Processing...
+            </div>
+            
+            <div class="status" id="status"></div>
+        </form>
+    </div>
+
+    <script>
+        // Configuration - Replace with your n8n webhook URL
+        const N8N_WEBHOOK_URL = 'https://your-n8n-instance.com/webhook/chatwoot-order';
+        
+        let chatwootData = null;
+        let isConnected = false;
+        
+        // DOM elements
+        const connectionStatus = document.getElementById('connectionStatus');
+        const form = document.getElementById('orderForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const loading = document.getElementById('loading');
+        const status = document.getElementById('status');
+        const nameField = document.getElementById('name');
+        const emailField = document.getElementById('email');
+        const bestelnummerField = document.getElementById('bestelnummer');
+        
+        // Listen for messages from Chatwoot
+        window.addEventListener('message', function(event) {
+            if (!isJSONValid(event.data)) {
+                return;
+            }
+            
+            try {
+                const eventData = JSON.parse(event.data);
+                
+                if (eventData.event === 'appContext') {
+                    chatwootData = eventData.data;
+                    updateConnectionStatus(true);
+                    populateForm();
+                }
+            } catch (error) {
+                console.error('Error parsing Chatwoot data:', error);
+            }
+        });
+        
+        // Request initial data from Chatwoot
+        function requestChatwootData() {
+            try {
+                window.parent.postMessage('chatwoot-dashboard-app:fetch-info', '*');
+            } catch (error) {
+                console.error('Error requesting Chatwoot data:', error);
+            }
+        }
+        
+        // Check if string is valid JSON
+        function isJSONValid(str) {
+            try {
+                JSON.parse(str);
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+        
+        // Update connection status
+        function updateConnectionStatus(connected) {
+            isConnected = connected;
+            if (connected) {
+                connectionStatus.textContent = '✓ Connected to Chatwoot';
+                connectionStatus.className = 'connection-status connected';
+            } else {
+                connectionStatus.textContent = '✗ Not connected to Chatwoot';
+                connectionStatus.className = 'connection-status disconnected';
+            }
+        }
+        
+        // Populate form with Chatwoot data
+        function populateForm() {
+            if (!chatwootData) return;
+            
+            const contact = chatwootData.contact;
+            const conversation = chatwootData.conversation;
+            
+            // Auto-fill name
+            if (contact.name) {
+                nameField.value = contact.name;
+                nameField.classList.add('auto-filled');
+            }
+            
+            // Auto-fill email
+            if (contact.email) {
+                emailField.value = contact.email;
+                emailField.classList.add('auto-filled');
+            }
+            
+            // Try to extract order number from conversation messages or custom attributes
+            const bestelnummer = extractBestelnummer(contact, conversation);
+            if (bestelnummer) {
+                bestelnummerField.value = bestelnummer;
+                bestelnummerField.classList.add('auto-filled');
+            }
+        }
+        
+        // Extract bestelnummer from various sources
+        function extractBestelnummer(contact, conversation) {
+            // Check custom attributes first
+            if (contact.custom_attributes && contact.custom_attributes.bestelnummer) {
+                return contact.custom_attributes.bestelnummer;
+            }
+            
+            if (contact.custom_attributes && contact.custom_attributes.order_number) {
+                return contact.custom_attributes.order_number;
+            }
+            
+            // Check conversation messages for order numbers
+            if (conversation.messages && conversation.messages.length > 0) {
+                for (const message of conversation.messages) {
+                    const orderMatch = message.content.match(/(?:bestelnummer|order|#)[\s:]*([A-Z0-9]+)/i);
+                    if (orderMatch) {
+                        return orderMatch[1];
+                    }
+                }
+            }
+            
+            // Check additional attributes
+            if (contact.additional_attributes && contact.additional_attributes.bestelnummer) {
+                return contact.additional_attributes.bestelnummer;
+            }
+            
+            return null;
+        }
+        
+        // Show status message
+        function showStatus(message, type) {
+            status.textContent = message;
+            status.className = `status ${type}`;
+            status.style.display = 'block';
+            
+            if (type === 'success') {
+                setTimeout(() => {
+                    status.style.display = 'none';
+                }, 3000);
+            }
+        }
+        
+        // Handle form submission
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            // Collect form data
+            const formData = {
+                name: nameField.value.trim(),
+                email: emailField.value.trim(),
+                bestelnummer: bestelnummerField.value.trim(),
+                pakket: document.getElementById('pakket').value,
+                timestamp: new Date().toISOString(),
+                chatwoot_data: chatwootData || null
+            };
+            
+            // Validate required fields
+            if (!formData.name || !formData.email || !formData.bestelnummer || !formData.pakket) {
+                showStatus('Please fill in all required fields', 'error');
+                return;
+            }
+            
+            // Show loading state
+            submitBtn.disabled = true;
+            loading.style.display = 'block';
+            status.style.display = 'none';
+            
+            try {
+                // Send to n8n webhook
+                const response = await fetch(N8N_WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                if (response.ok) {
+                    showStatus('Order submitted successfully!', 'success');
+                    // Optionally reset form or keep data for reference
+                    document.getElementById('pakket').value = '';
+                } else {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+            } catch (error) {
+                console.error('Error sending to n8n:', error);
+                showStatus(`Error: ${error.message}`, 'error');
+            } finally {
+                // Hide loading state
+                submitBtn.disabled = false;
+                loading.style.display = 'none';
+            }
+        });
+        
+        // Initialize - request data from Chatwoot when the app loads
+        window.addEventListener('load', function() {
+            setTimeout(requestChatwootData, 500);
+        });
+        
+        // Periodic retry for connection
+        setInterval(() => {
+            if (!isConnected) {
+                requestChatwootData();
+            }
+        }, 3000);
+    </script>
+</body>
+</html>
