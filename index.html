@@ -145,10 +145,25 @@
             color: #e53e3e;
             border: 1px solid #feb2b2;
         }
+        
+        .security-error {
+            background: #fed7d7;
+            border: 1px solid #feb2b2;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            color: #e53e3e;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
     <div class="container">
+        <div id="securityError" class="security-error" style="display: none;">
+            ⚠️ This form can only be used from https://chat.gsmplus.nl/
+        </div>
+        
         <div id="connectionStatus" class="connection-status disconnected">
             Waiting for Chatwoot connection...
         </div>
@@ -193,14 +208,18 @@
     </div>
 
     <script>
-        // Configuration - Replace with your n8n webhook URL
+        // Configuration
         const N8N_WEBHOOK_URL = 'https://your-n8n-instance.com/webhook/chatwoot-order';
+        const SHARED_SECRET = 'your-hmac-secret-key-here'; // Set this same value in n8n
+        const ALLOWED_ORIGIN = 'https://chat.gsmplus.nl';
         
         let chatwootData = null;
         let isConnected = false;
+        let originValidated = false;
         
         // DOM elements
         const connectionStatus = document.getElementById('connectionStatus');
+        const securityError = document.getElementById('securityError');
         const form = document.getElementById('orderForm');
         const submitBtn = document.getElementById('submitBtn');
         const loading = document.getElementById('loading');
@@ -209,8 +228,51 @@
         const emailField = document.getElementById('email');
         const bestelnummerField = document.getElementById('bestelnummer');
         
+        // HMAC signature generation
+        async function generateHMAC(data, secret) {
+            const encoder = new TextEncoder();
+            const dataBuffer = encoder.encode(data);
+            const keyBuffer = encoder.encode(secret);
+            
+            const cryptoKey = await crypto.subtle.importKey(
+                'raw',
+                keyBuffer,
+                { name: 'HMAC', hash: 'SHA-256' },
+                false,
+                ['sign']
+            );
+            
+            const signature = await crypto.subtle.sign('HMAC', cryptoKey, dataBuffer);
+            const hashArray = Array.from(new Uint8Array(signature));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+        
+        // Origin validation
+        function validateOrigin(origin) {
+            return origin === ALLOWED_ORIGIN;
+        }
+        
+        // Show security error and disable form
+        function showSecurityError() {
+            securityError.style.display = 'block';
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Access Denied';
+        }
+        
         // Listen for messages from Chatwoot
         window.addEventListener('message', function(event) {
+            // Validate origin
+            if (!validateOrigin(event.origin)) {
+                console.error('Invalid origin:', event.origin);
+                showSecurityError();
+                return;
+            }
+            
+            originValidated = true;
+            securityError.style.display = 'none';
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Send to n8n Workflow';
+            
             if (!isJSONValid(event.data)) {
                 return;
             }
@@ -278,7 +340,7 @@
                 emailField.classList.add('auto-filled');
             }
             
-            // Try to extract order number from conversation messages or custom attributes
+            // Try to extract order number
             const bestelnummer = extractBestelnummer(contact, conversation);
             if (bestelnummer) {
                 bestelnummerField.value = bestelnummer;
@@ -332,6 +394,12 @@
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
             
+            // Security check
+            if (!originValidated) {
+                showStatus('Access denied. Must be used from authorized Chatwoot instance.', 'error');
+                return;
+            }
+            
             // Collect form data
             const formData = {
                 name: nameField.value.trim(),
@@ -348,27 +416,42 @@
                 return;
             }
             
-            // Show loading state
-            submitBtn.disabled = true;
-            loading.style.display = 'block';
-            status.style.display = 'none';
-            
             try {
+                // Generate HMAC signature
+                const dataToSign = JSON.stringify({
+                    name: formData.name,
+                    email: formData.email,
+                    bestelnummer: formData.bestelnummer,
+                    pakket: formData.pakket,
+                    timestamp: formData.timestamp
+                });
+                
+                const signature = await generateHMAC(dataToSign, SHARED_SECRET);
+                
+                // Show loading state
+                submitBtn.disabled = true;
+                loading.style.display = 'block';
+                status.style.display = 'none';
+                
                 // Send to n8n webhook
                 const response = await fetch(N8N_WEBHOOK_URL, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'X-HMAC-Signature': signature,
+                        'X-Origin': ALLOWED_ORIGIN
                     },
                     body: JSON.stringify(formData)
                 });
                 
                 if (response.ok) {
+                    const result = await response.json();
                     showStatus('Order submitted successfully!', 'success');
-                    // Optionally reset form or keep data for reference
+                    // Reset package selection
                     document.getElementById('pakket').value = '';
                 } else {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
                 }
                 
             } catch (error) {
@@ -381,14 +464,19 @@
             }
         });
         
-        // Initialize - request data from Chatwoot when the app loads
+        // Initialize
         window.addEventListener('load', function() {
+            // Basic iframe check
+            if (window.top === window.self) {
+                console.warn('App accessed directly, not from iframe');
+            }
+            
             setTimeout(requestChatwootData, 500);
         });
         
         // Periodic retry for connection
         setInterval(() => {
-            if (!isConnected) {
+            if (!isConnected && originValidated) {
                 requestChatwootData();
             }
         }, 3000);
